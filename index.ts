@@ -66,6 +66,7 @@ interface SessionEntry {
   type?: string;
   message?: {
     role?: string;
+    content?: string | Array<{ type?: string; text?: string }>;
     usage?: {
       input?: number;
       output?: number;
@@ -81,6 +82,7 @@ interface SessionEntry {
   };
   // Legacy flat format
   role?: string;
+  content?: string | Array<{ type?: string; text?: string }>;
   usage?: {
     input?: number;
     output?: number;
@@ -224,6 +226,22 @@ async function insertUsage(record: UsageRecord, userInfo?: UserInfo) {
     record.costUsd,
     record.timestamp,
   ]);
+}
+
+async function insertMessage(sessionKey: string, botId: string, userId: number | null, role: string, content: string, model?: string) {
+  if (!pool || !content.trim()) return;
+  
+  // Truncate content to 10000 chars to avoid bloating the DB
+  const truncated = content.length > 10000 ? content.slice(0, 10000) + '\n...[truncated]' : content;
+  
+  try {
+    await pool.query(`
+      INSERT INTO messages (session_key, bot_id, user_id, role, content, model, created_at)
+      VALUES ($1, $2, $3, $4, $5, $6, NOW())
+    `, [sessionKey, botId, userId, role, truncated, model || null]);
+  } catch (err) {
+    // Silently skip duplicate or failed inserts
+  }
 }
 
 function parseUserId(userId: string): [string, string] {
@@ -437,6 +455,24 @@ class SessionWatcher {
       const lines = newContent.split("\n").filter(line => line.trim());
       let processedCount = 0;
       
+      // Helper to extract text content from message
+      const extractContent = (raw: string | Array<{ type?: string; text?: string }> | undefined): string => {
+        if (!raw) return '';
+        if (typeof raw === 'string') return raw;
+        if (Array.isArray(raw)) {
+          return raw
+            .filter(block => block.type === 'text' && block.text)
+            .map(block => block.text)
+            .join('\n');
+        }
+        return '';
+      };
+      
+      const sessionKey = basename(filePath, ".jsonl");
+      const recordBotId = getBotIdForAgent(agentId);
+      let cachedUserInfo: UserInfo | null | undefined = undefined;
+      let cachedUserId: number | null = null;
+      
       for (const line of lines) {
         try {
           const entry = JSON.parse(line) as SessionEntry;
@@ -446,16 +482,30 @@ class SessionWatcher {
           const role = msg.role;
           const usage = msg.usage;
           const model = msg.model;
+          const content = extractContent(msg.content);
           
-          // Only process assistant messages with usage
-          if (role === "assistant" && usage) {
-            const sessionKey = basename(filePath, ".jsonl");
+          // Lazy-load user info
+          if (cachedUserInfo === undefined) {
+            cachedUserInfo = await this.getUserInfoForSession(agentId, sessionKey);
+            if (cachedUserInfo) {
+              cachedUserId = await getOrCreateUser(cachedUserInfo, recordBotId);
+            }
+          }
+          
+          // Store user messages
+          if (role === "user" && content && cachedUserInfo) {
+            await insertMessage(sessionKey, recordBotId, cachedUserId, 'user', content);
+          }
+          
+          // Store assistant messages + usage tracking
+          if (role === "assistant" && cachedUserInfo) {
+            // Store message content if present
+            if (content) {
+              await insertMessage(sessionKey, recordBotId, cachedUserId, 'assistant', content, model);
+            }
             
-            // Extract user info from session metadata
-            const userInfo = await this.getUserInfoForSession(agentId, sessionKey);
-            
-            if (userInfo) {
-              // Handle both field naming conventions
+            // Track usage if present
+            if (usage) {
               const inputTokens = usage.input ?? usage.input_tokens ?? 0;
               const outputTokens = usage.output ?? usage.output_tokens ?? 0;
               const cacheReadTokens = usage.cacheRead ?? usage.cache_read_input_tokens ?? 0;
@@ -466,8 +516,8 @@ class SessionWatcher {
                 timestamp: Date.now(),
                 agentId,
                 sessionKey,
-                userId: `${userInfo.channel}:${userInfo.externalId}`,
-                channel: userInfo.channel,
+                userId: `${cachedUserInfo.channel}:${cachedUserInfo.externalId}`,
+                channel: cachedUserInfo.channel,
                 inputTokens,
                 outputTokens,
                 cacheReadTokens,
@@ -475,7 +525,7 @@ class SessionWatcher {
                 model: modelName,
                 provider: "anthropic",
                 costUsd: calculateCost(modelName, inputTokens, outputTokens, cacheReadTokens),
-              }, userInfo);
+              }, cachedUserInfo);
               processedCount++;
             }
           }
