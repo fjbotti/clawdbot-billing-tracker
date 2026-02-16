@@ -183,7 +183,7 @@ class DatabaseBackend implements StorageBackend {
         updated_at TIMESTAMP DEFAULT NOW()
       )
     `);
-    this.logger.info("[billing-tracker] Connected to PostgreSQL (direct mode)");
+    this.logger.info("[clawdx-plugin] Connected to PostgreSQL (direct mode)");
   }
 
   async shutdown() {
@@ -298,7 +298,7 @@ class ApiBackend implements StorageBackend {
   ) {
     // Normalize URL (remove trailing slash)
     this.dashboardUrl = dashboardUrl.replace(/\/+$/, '');
-    this.positionsFile = join(homedir(), ".clawdbot", "billing-tracker-positions.json");
+    this.positionsFile = join(homedir(), ".clawdbot", "clawdx-plugin-positions.json");
   }
 
   async init() {
@@ -318,13 +318,13 @@ class ApiBackend implements StorageBackend {
       });
       if (res.ok) {
         const data = await res.json();
-        this.logger.info(`[billing-tracker] Connected to dashboard API: ${data.connection?.name || 'OK'}`);
+        this.logger.info(`[clawdx-plugin] Connected to dashboard API: ${data.connection?.name || 'OK'}`);
       } else {
         const err = await res.text();
-        this.logger.error(`[billing-tracker] Dashboard API ping failed: ${res.status} ${err}`);
+        this.logger.error(`[clawdx-plugin] Dashboard API ping failed: ${res.status} ${err}`);
       }
     } catch (err) {
-      this.logger.error(`[billing-tracker] Cannot reach dashboard API: ${err}`);
+      this.logger.error(`[clawdx-plugin] Cannot reach dashboard API: ${err}`);
     }
 
     // Start batch flush timer
@@ -409,14 +409,14 @@ class ApiBackend implements StorageBackend {
       });
       if (res.ok) {
         const data = await res.json();
-        this.logger.info(`[billing-tracker] Flushed ${data.inserted} usage records to dashboard API`);
+        this.logger.info(`[clawdx-plugin] Flushed ${data.inserted} usage records to dashboard API`);
       } else {
-        this.logger.error(`[billing-tracker] Usage flush failed: ${res.status}`);
+        this.logger.error(`[clawdx-plugin] Usage flush failed: ${res.status}`);
         // Re-queue failed records
         this.usageBatch.unshift(...batch);
       }
     } catch (err) {
-      this.logger.error(`[billing-tracker] Usage flush error: ${err}`);
+      this.logger.error(`[clawdx-plugin] Usage flush error: ${err}`);
       this.usageBatch.unshift(...batch);
     }
   }
@@ -435,13 +435,13 @@ class ApiBackend implements StorageBackend {
       });
       if (res.ok) {
         const data = await res.json();
-        this.logger.info(`[billing-tracker] Flushed ${data.inserted} messages to dashboard API`);
+        this.logger.info(`[clawdx-plugin] Flushed ${data.inserted} messages to dashboard API`);
       } else {
-        this.logger.error(`[billing-tracker] Messages flush failed: ${res.status}`);
+        this.logger.error(`[clawdx-plugin] Messages flush failed: ${res.status}`);
         this.messageBatch.unshift(...batch);
       }
     } catch (err) {
-      this.logger.error(`[billing-tracker] Messages flush error: ${err}`);
+      this.logger.error(`[clawdx-plugin] Messages flush error: ${err}`);
       this.messageBatch.unshift(...batch);
     }
   }
@@ -512,7 +512,7 @@ class SessionWatcher {
   }
 
   async start() {
-    this.logger.info(`[billing-tracker] Starting session watcher for agents: ${this.trackedAgents.length > 0 ? this.trackedAgents.join(", ") : "all"}`);
+    this.logger.info(`[clawdx-plugin] Starting session watcher for agents: ${this.trackedAgents.length > 0 ? this.trackedAgents.join(", ") : "all"}`);
     await this.scanAgents();
   }
 
@@ -533,13 +533,13 @@ class SessionWatcher {
         } catch {}
       }
     } catch (err) {
-      this.logger.error(`[billing-tracker] Error scanning agents: ${err}`);
+      this.logger.error(`[clawdx-plugin] Error scanning agents: ${err}`);
     }
   }
 
   private watchSessionsDir(agentId: string, sessionsDir: string) {
     if (this.watchers.has(sessionsDir)) return;
-    this.logger.info(`[billing-tracker] Watching ${agentId} sessions...`);
+    this.logger.info(`[clawdx-plugin] Watching ${agentId} sessions...`);
 
     const watcher = watch(sessionsDir, async (_eventType, filename) => {
       if (!filename || !filename.endsWith(".jsonl")) return;
@@ -634,7 +634,7 @@ class SessionWatcher {
 
       await this.backend.setFilePosition(filePath, content.length);
       if (processedCount > 0) {
-        this.logger.info(`[billing-tracker] Processed ${processedCount} usage records from ${agentId}`);
+        this.logger.info(`[clawdx-plugin] Processed ${processedCount} usage records from ${agentId}`);
       }
     } catch {}
   }
@@ -663,11 +663,11 @@ class SessionWatcher {
 // ============================================================
 
 export default function billingTrackerPlugin(api: PluginApi) {
-  const config: PluginConfig = (api.config as { plugins?: { entries?: { "billing-tracker"?: { config?: PluginConfig } } } })
-    ?.plugins?.entries?.["billing-tracker"]?.config ?? {};
+  const config: PluginConfig = (api.config as { plugins?: { entries?: { "clawdx-plugin"?: { config?: PluginConfig } } } })
+    ?.plugins?.entries?.["clawdx-plugin"]?.config ?? {};
 
   if (config.enabled === false) {
-    api.logger.info("[billing-tracker] Plugin disabled");
+    api.logger.info("[clawdx-plugin] Plugin disabled");
     return;
   }
 
@@ -701,11 +701,11 @@ export default function billingTrackerPlugin(api: PluginApi) {
   const useApi = !!(dashboardUrl && dashboardApiKey);
   const useDb = !!databaseUrl;
 
-  api.logger.info(`[billing-tracker] Config: dashboardUrl=${dashboardUrl || 'NOT SET'}, apiKey=${dashboardApiKey ? dashboardApiKey.slice(0,8) + '...' : 'NOT SET'}, dbUrl=${databaseUrl ? 'SET' : 'NOT SET'}, useApi=${useApi}, useDb=${useDb}`);
-  api.logger.info(`[billing-tracker] .env vars loaded: ${Object.keys(envVars).join(', ') || 'NONE'}`);
+  api.logger.info(`[clawdx-plugin] Config: dashboardUrl=${dashboardUrl || 'NOT SET'}, apiKey=${dashboardApiKey ? dashboardApiKey.slice(0,8) + '...' : 'NOT SET'}, dbUrl=${databaseUrl ? 'SET' : 'NOT SET'}, useApi=${useApi}, useDb=${useDb}`);
+  api.logger.info(`[clawdx-plugin] .env vars loaded: ${Object.keys(envVars).join(', ') || 'NONE'}`);
 
   if (!useApi && !useDb) {
-    api.logger.error("[billing-tracker] No backend configured. Set dashboardUrl+dashboardApiKey (API mode) or BILLING_DATABASE_URL (DB mode)");
+    api.logger.error("[clawdx-plugin] No backend configured. Set dashboardUrl+dashboardApiKey (API mode) or BILLING_DATABASE_URL (DB mode)");
     return;
   }
 
@@ -718,22 +718,22 @@ export default function billingTrackerPlugin(api: PluginApi) {
   let watcher: SessionWatcher | null = null;
 
   if (useApi) {
-    api.logger.info(`[billing-tracker] Mode: Dashboard API → ${dashboardUrl}`);
+    api.logger.info(`[clawdx-plugin] Mode: Dashboard API → ${dashboardUrl}`);
     backend = new ApiBackend(dashboardUrl, dashboardApiKey, api.logger, config.batchSize, config.batchIntervalMs);
   } else {
-    api.logger.info(`[billing-tracker] Mode: Direct Database`);
+    api.logger.info(`[clawdx-plugin] Mode: Direct Database`);
     backend = new DatabaseBackend(databaseUrl!, api.logger);
   }
 
   api.registerService({
-    id: "billing-tracker",
+    id: "clawdx-plugin",
     start: async () => {
       try {
         await backend.init();
         watcher = new SessionWatcher(api.logger, trackedAgents, backend);
         await watcher.start();
       } catch (err) {
-        api.logger.error(`[billing-tracker] Failed to start: ${err}`);
+        api.logger.error(`[clawdx-plugin] Failed to start: ${err}`);
       }
     },
     stop: async () => {
@@ -809,5 +809,5 @@ export default function billingTrackerPlugin(api: PluginApi) {
     },
   });
 
-  api.logger.info(`[billing-tracker] Plugin loaded (${useApi ? 'API' : 'PostgreSQL'} mode)`);
+  api.logger.info(`[clawdx-plugin] Plugin loaded (${useApi ? 'API' : 'PostgreSQL'} mode)`);
 }

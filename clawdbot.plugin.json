@@ -1,5 +1,5 @@
 {
-  "id": "billing-tracker",
+  "id": "clawdx-plugin",
   "name": "ClawdX Plugin",
   "version": "0.3.0",
   "description": "ClawdX plugin for Clawdbot — tracks token usage, conversations, and costs per user/agent",

@@ -1,19 +1,52 @@
 {
-  "name": "billing-tracker",
-  "version": "0.2.0",
-  "description": "Clawdbot plugin for tracking token usage per user/agent (PostgreSQL)",
+  "name": "clawdx-plugin",
+  "version": "1.0.0",
+  "description": "ClawdX plugin for Clawdbot — track usage, conversations, and costs for your AI agents",
   "type": "module",
-  "main": "index.ts",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist/",
+    "clawdbot.plugin.json",
+    "README.md",
+    "LICENSE"
+  ],
   "clawdbot": {
     "extensions": [
       "./index.ts"
     ]
+  },
+  "scripts": {
+    "build": "esbuild index.ts --outfile=dist/index.js --platform=node --format=esm --bundle --external:pg",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "clawdbot",
+    "clawdx",
+    "ai-agents",
+    "billing",
+    "usage-tracking",
+    "chatbot-analytics",
+    "token-tracking",
+    "ai-monetization",
+    "bot-management"
+  ],
+  "author": "SparkLabs <hello@sparklabs.digital> (https://sparklabs.digital)",
+  "license": "MIT",
+  "homepage": "https://getclawdx.vercel.app",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/fjbotti/clawdbot-billing-tracker.git"
+  },
+  "bugs": {
+    "url": "https://github.com/fjbotti/clawdbot-billing-tracker/issues"
   },
   "dependencies": {
     "pg": "^8.18.0"
   },
   "devDependencies": {
     "@types/pg": "^8.15.4",
+    "esbuild": "^0.27.0",
     "typescript": "^5.9.3"
   }
 }
