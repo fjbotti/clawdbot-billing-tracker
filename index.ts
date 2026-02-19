@@ -13,6 +13,7 @@
 import { watch, FSWatcher } from "fs";
 import { readFile, readdir, stat } from "fs/promises";
 import { join, basename } from "path";
+import { createHash } from "crypto";
 import { homedir } from "os";
 import pg from "pg";
 
@@ -80,6 +81,7 @@ interface MessageRecord {
   model?: string;
   userId?: string;
   channel?: string;
+  dedupKey?: string;
 }
 
 interface SessionEntry {
@@ -344,6 +346,12 @@ class ApiBackend implements StorageBackend {
 
   async insertUsage(record: UsageRecord) {
     const botId = getBotIdForAgent(record.agentId);
+    const createdAt = new Date(record.timestamp).toISOString();
+    // Dedup key: unique per session + timestamp + model + output tokens
+    const dedupKey = makeDedupKey(
+      botId, record.sessionKey, createdAt,
+      record.model, record.inputTokens, record.outputTokens
+    );
     const payload: Record<string, unknown> = {
       botId,
       sessionKey: record.sessionKey,
@@ -354,7 +362,8 @@ class ApiBackend implements StorageBackend {
       model: record.model,
       provider: record.provider,
       cost: record.costUsd,
-      createdAt: new Date(record.timestamp).toISOString(),
+      createdAt,
+      dedupKey,
     };
 
     // Include user info if available
@@ -471,6 +480,12 @@ const agentToBotMap: Map<string, string> = new Map();
 
 function getBotIdForAgent(agentId: string): string {
   return agentToBotMap.get(agentId) ?? agentId;
+}
+
+/** Generate a short dedup key from components. Returns a 16-char hex string. */
+function makeDedupKey(...parts: (string | number | undefined)[]): string {
+  const raw = parts.map(p => p ?? '').join('|');
+  return createHash('sha256').update(raw).digest('hex').slice(0, 16);
 }
 
 function parseUserId(userId: string): [string, string] {
@@ -594,18 +609,22 @@ class SessionWatcher {
 
           // Store user messages
           if (role === "user" && messageContent && cachedUserInfo) {
+            const msgDedupKey = makeDedupKey(recordBotId, sessionKey, 'user', messageContent.slice(0, 200));
             await this.backend.insertMessage({
               sessionKey, botId: recordBotId, role: 'user', content: messageContent,
               userId: cachedUserInfo.externalId, channel: cachedUserInfo.channel,
+              dedupKey: msgDedupKey,
             });
           }
 
           // Store assistant messages + usage
           if (role === "assistant" && cachedUserInfo) {
             if (messageContent) {
+              const msgDedupKey = makeDedupKey(recordBotId, sessionKey, 'assistant', messageContent.slice(0, 200), model);
               await this.backend.insertMessage({
                 sessionKey, botId: recordBotId, role: 'assistant', content: messageContent, model,
                 userId: cachedUserInfo.externalId, channel: cachedUserInfo.channel,
+                dedupKey: msgDedupKey,
               });
             }
             if (usage) {
