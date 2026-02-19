@@ -43,6 +43,11 @@ interface PluginApi {
     description: string;
     handler: (ctx: { senderId?: string }) => { text: string } | Promise<{ text: string }>;
   }) => void;
+  on: (
+    hookName: string,
+    handler: (event: Record<string, unknown>, ctx: Record<string, unknown>) => unknown | Promise<unknown>,
+    opts?: { priority?: number }
+  ) => void;
 }
 
 interface PluginConfig {
@@ -658,7 +663,7 @@ class SessionWatcher {
     } catch {}
   }
 
-  private async getUserInfoForSession(agentId: string, sessionId: string): Promise<UserInfo | null> {
+  async getUserInfoForSession(agentId: string, sessionId: string): Promise<UserInfo | null> {
     try {
       const sessionsJsonPath = join(this.agentsDir, agentId, "sessions", "sessions.json");
       const content = await readFile(sessionsJsonPath, "utf-8");
@@ -827,6 +832,104 @@ export default function billingTrackerPlugin(api: PluginApi) {
       } catch (err) { return { text: `❌ Error: ${err}` }; }
     },
   });
+
+  // ============================================================
+  // BILLING ENFORCEMENT HOOKS (Phase 4D)
+  // ============================================================
+
+  if (useApi && dashboardUrl && dashboardApiKey) {
+    // In-memory billing cache (TTL: 60s)
+    const billingCache = new Map<string, { result: Record<string, unknown>; expiresAt: number }>();
+
+    const checkBillingCached = async (botId: string, userId: string, channel: string): Promise<Record<string, unknown> | null> => {
+      const key = `${botId}:${channel}:${userId}`;
+      const cached = billingCache.get(key);
+      if (cached && cached.expiresAt > Date.now()) return cached.result;
+
+      try {
+        const url = `${dashboardUrl}/api/billing/client/check?` + new URLSearchParams({ botId, externalUserId: userId, channel });
+        const res = await fetch(url, {
+          headers: { 'Authorization': `Bearer ${dashboardApiKey}` },
+          signal: AbortSignal.timeout(3000),
+        });
+        if (!res.ok) return null;
+        const result = await res.json();
+        billingCache.set(key, { result, expiresAt: Date.now() + 60_000 });
+        return result;
+      } catch (err) {
+        api.logger.warn(`[clawdx-plugin] Billing check failed (fail-open): ${err}`);
+        return null;
+      }
+    };
+
+    // Hook: before_prompt_build — check if user can send message
+    api.on("before_prompt_build", async (_event: Record<string, unknown>, ctx: Record<string, unknown>) => {
+      const agentId = (ctx.agentId as string) ?? 'main';
+      const botId = getBotIdForAgent(agentId);
+      const sessionKey = ctx.sessionKey as string;
+      if (!sessionKey) return;
+
+      // Get user info from the watcher's cached session data
+      let userInfo: UserInfo | null = null;
+      if (watcher) {
+        userInfo = await (watcher as SessionWatcher).getUserInfoForSession(agentId, sessionKey.split(':').pop() || sessionKey);
+      }
+      if (!userInfo) return;
+
+      const billing = await checkBillingCached(botId, userInfo.externalId, userInfo.channel);
+      if (!billing || billing.allowed !== false) return;
+
+      // User is BLOCKED — inject system context
+      const blockMsg = (billing.blockMessage as string) || "You've reached your usage limit.";
+      const paymentUrl = billing.paymentUrl ? `\n\nPayment link: ${billing.paymentUrl}` : '';
+
+      return {
+        prependContext: `[BILLING ENFORCEMENT - DO NOT IGNORE]
+The user "${userInfo.externalId}" on ${userInfo.channel} has been BLOCKED by the billing system.
+Reason: ${billing.reason || 'billing_blocked'}
+
+You MUST respond with ONLY the following message (do not add anything else, do not answer their question):
+
+"${blockMsg}${paymentUrl}"
+
+Do NOT process the user's request. Do NOT answer any questions. Only send the billing message above.`,
+      };
+    }, { priority: 100 });
+
+    // Hook: agent_end — deduct credits after successful response
+    api.on("agent_end", async (event: Record<string, unknown>, ctx: Record<string, unknown>) => {
+      if (event.success === false) return;
+
+      const agentId = (ctx.agentId as string) ?? 'main';
+      const botId = getBotIdForAgent(agentId);
+      const sessionKey = ctx.sessionKey as string;
+      if (!sessionKey) return;
+
+      let userInfo: UserInfo | null = null;
+      if (watcher) {
+        userInfo = await (watcher as SessionWatcher).getUserInfoForSession(agentId, sessionKey.split(':').pop() || sessionKey);
+      }
+      if (!userInfo) return;
+
+      try {
+        await fetch(`${dashboardUrl}/api/billing/client/deduct`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${dashboardApiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ botId, externalUserId: userInfo.externalId, channel: userInfo.channel }),
+          signal: AbortSignal.timeout(3000),
+        });
+        // Invalidate cache after deduction
+        billingCache.delete(`${botId}:${userInfo.channel}:${userInfo.externalId}`);
+      } catch (err) {
+        api.logger.warn(`[clawdx-plugin] Credit deduction failed: ${err}`);
+      }
+    });
+
+    api.logger.info("[clawdx-plugin] Billing enforcement hooks registered");
+  }
 
   api.logger.info(`[clawdx-plugin] Plugin loaded (${useApi ? 'API' : 'PostgreSQL'} mode)`);
 }
